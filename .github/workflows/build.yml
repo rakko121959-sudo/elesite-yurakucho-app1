@@ -1,0 +1,367 @@
+name: Build Android APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Create Android project
+        shell: bash
+        run: |
+          mkdir -p app/src/main/java/jp/example/elesiteyurakucho
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "ElesiteYurakucho"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+
+          mkdir -p app
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'jp.example.elesiteyurakucho'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'jp.example.elesiteyurakucho'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName '0.1'
+              }
+          }
+          EOF
+
+          mkdir -p app/src/main
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+
+              <application
+                  android:theme="@style/AppTheme"
+                  android:label="小竹向原 発車案内"
+                  android:usesCleartextTraffic="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+
+                  </activity>
+              </application>
+
+          </manifest>
+          EOF
+
+          mkdir -p app/src/main/res/values
+
+          cat > app/src/main/res/values/styles.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:colorAccent">#D7C447</item>
+                  <item name="android:navigationBarColor">#000000</item>
+                  <item name="android:statusBarColor">#000000</item>
+                  <item name="android:windowLightStatusBar">false</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > app/src/main/java/jp/example/elesiteyurakucho/MainActivity.java <<'EOF'
+          package jp.example.elesiteyurakucho;
+
+          import android.app.Activity;
+          import android.graphics.Color;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          public class MainActivity extends Activity {
+
+              private TextView status;
+              private TextView trainNumber;
+              private TextView formation;
+              private WebView webView;
+              private final Handler handler = new Handler(Looper.getMainLooper());
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(48, 64, 48, 48);
+                  root.setBackgroundColor(Color.rgb(10, 12, 15));
+
+                  TextView station = text("小竹向原 → 新木場", 22, Color.WHITE);
+                  root.addView(station);
+
+                  TextView time = text("21:07", 64, Color.WHITE);
+                  time.setPadding(0, 35, 0, 0);
+                  root.addView(time);
+
+                  TextView line = text("有楽町線　新木場行", 27,
+                          Color.rgb(215, 196, 71));
+                  root.addView(line);
+
+                  TextView divider = text(
+                          "────────────────────", 18,
+                          Color.DKGRAY);
+                  divider.setPadding(0, 35, 0, 25);
+                  root.addView(divider);
+
+                  trainNumber = text("列車番号　取得中…", 23, Color.WHITE);
+                  root.addView(trainNumber);
+
+                  formation = text("充当編成　取得中…", 23, Color.WHITE);
+                  formation.setPadding(0, 18, 0, 0);
+                  root.addView(formation);
+
+                  status = text("えれサイトから運用情報を取得しています", 16,
+                          Color.LTGRAY);
+                  status.setPadding(0, 35, 0, 0);
+                  root.addView(status);
+
+                  Button reload = new Button(this);
+                  reload.setText("再取得");
+                  reload.setAllCaps(false);
+                  LinearLayout.LayoutParams bp =
+                          new LinearLayout.LayoutParams(
+                                  LinearLayout.LayoutParams.MATCH_PARENT,
+                                  LinearLayout.LayoutParams.WRAP_CONTENT);
+                  bp.setMargins(0, 45, 0, 0);
+                  root.addView(reload, bp);
+
+                  webView = new WebView(this);
+                  webView.setVisibility(View.GONE);
+                  root.addView(webView,
+                          new LinearLayout.LayoutParams(1, 1));
+
+                  WebSettings ws = webView.getSettings();
+                  ws.setJavaScriptEnabled(true);
+                  ws.setDomStorageEnabled(true);
+                  ws.setUserAgentString(
+                          "Mozilla/5.0 (Linux; Android 14) " +
+                          "AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36");
+
+                  webView.addJavascriptInterface(
+                          new Bridge(), "AndroidBridge");
+                  webView.setWebChromeClient(new WebChromeClient());
+
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public void onPageFinished(WebView view, String url) {
+                          handler.postDelayed(
+                                  () -> selectYurakucho(), 2500);
+                      }
+                  });
+
+                  reload.setOnClickListener(v -> loadElesite());
+
+                  setContentView(root);
+                  loadElesite();
+              }
+
+              private TextView text(String s, int size, int color) {
+                  TextView v = new TextView(this);
+                  v.setText(s);
+                  v.setTextSize(size);
+                  v.setTextColor(color);
+                  v.setGravity(Gravity.START);
+                  return v;
+              }
+
+              private void loadElesite() {
+                  trainNumber.setText("列車番号　取得中…");
+                  formation.setText("充当編成　取得中…");
+                  status.setText("えれサイトから運用情報を取得しています");
+
+                  webView.loadUrl(
+                          "https://www.elesite-next.com/train_location");
+
+                  handler.postDelayed(() -> {
+                      if (trainNumber.getText().toString().contains("取得中")) {
+                          showError();
+                      }
+                  }, 18000);
+              }
+
+              private void selectYurakucho() {
+                  String js =
+                      "(function() {" +
+                      "  try {" +
+                      "    var sels=document.querySelectorAll('select');" +
+                      "    for(var s of sels) {" +
+                      "      for(var i=0;i<s.options.length;i++) {" +
+                      "        var t=s.options[i].textContent||'';" +
+                      "        if(t.indexOf('有楽町線')>=0) {" +
+                      "          s.selectedIndex=i;" +
+                      "          s.dispatchEvent(new Event('input',{bubbles:true}));" +
+                      "          s.dispatchEvent(new Event('change',{bubbles:true}));" +
+                      "        }" +
+                      "      }" +
+                      "    }" +
+                      "    var els=document.querySelectorAll('button,a,div,span,li');" +
+                      "    for(var e of els) {" +
+                      "      var x=(e.textContent||'').trim();" +
+                      "      if(x==='有楽町線' || x.indexOf('有楽町線')>=0) {" +
+                      "        try { e.click(); } catch(z) {}" +
+                      "      }" +
+                      "    }" +
+                      "    return 'ok';" +
+                      "  } catch(e) { return 'error'; }" +
+                      "})();";
+
+                  webView.evaluateJavascript(js, value ->
+                      handler.postDelayed(() -> extractData(), 5000)
+                  );
+              }
+
+              private void extractData() {
+                  String js =
+                      "(function() {" +
+                      " try {" +
+                      "   var text=(document.body.innerText||'')" +
+                      "      .replace(/\\u00a0/g,' ');" +
+
+                      "   var keys=['21:07','小竹向原','新木場'];" +
+                      "   var pos=text.indexOf('21:07');" +
+
+                      "   if(pos<0) {" +
+                      "      AndroidBridge.result('ERROR'); return;" +
+                      "   }" +
+
+                      "   var start=Math.max(0,pos-1000);" +
+                      "   var end=Math.min(text.length,pos+1800);" +
+                      "   var area=text.substring(start,end);" +
+
+                      "   if(area.indexOf('新木場')<0) {" +
+                      "      AndroidBridge.result('ERROR'); return;" +
+                      "   }" +
+
+                      "   var trainMatches=area.match(/\\b[0-9]{2,5}[A-Z]\\b/g);" +
+                      "   var formMatches=area.match(/\\b[0-9]{4,6}F\\b/g);" +
+
+                      "   if(!trainMatches || !formMatches) {" +
+                      "      AndroidBridge.result('ERROR'); return;" +
+                      "   }" +
+
+                      "   var train=trainMatches[0];" +
+                      "   var form=formMatches[0];" +
+
+                      "   AndroidBridge.result(train+'|'+form);" +
+                      " } catch(e) {" +
+                      "   AndroidBridge.result('ERROR');" +
+                      " }" +
+                      "})();";
+
+                  webView.evaluateJavascript(js, null);
+              }
+
+              private void showError() {
+                  trainNumber.setText("列車番号　ERROR");
+                  formation.setText("充当編成　ERROR");
+                  status.setText("運用情報取得エラー");
+                  status.setTextColor(Color.rgb(255, 90, 90));
+              }
+
+              private class Bridge {
+                  @JavascriptInterface
+                  public void result(String value) {
+                      runOnUiThread(() -> {
+                          if (value == null ||
+                              value.equals("ERROR") ||
+                              !value.contains("|")) {
+                              showError();
+                              return;
+                          }
+
+                          String[] p = value.split("\\\\|");
+                          if (p.length < 2 ||
+                              p[0].trim().isEmpty() ||
+                              p[1].trim().isEmpty()) {
+                              showError();
+                              return;
+                          }
+
+                          trainNumber.setText(
+                                  "列車番号　" + p[0].trim());
+                          formation.setText(
+                                  "充当編成　" + p[1].trim());
+                          status.setText(
+                                  "えれサイトから取得");
+                          status.setTextColor(Color.rgb(110, 220, 130));
+                      });
+                  }
+              }
+          }
+          EOF
+
+      - name: Download Gradle
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          unzip -q gradle-8.7-bin.zip
+
+      - name: Build APK
+        run: |
+          ./gradle-8.7/bin/gradle :app:assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: elesite-yurakucho-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
